@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexi AI - Asistente Financiero</title>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <script src="config.js"></script>
+    <style>
+        :root { --accent: #00d4ff; --bg: #050505; --error: #ff3b30; --violet: #a855f7; }
+        body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; overflow-x: hidden; }
+        
+        /* Panel de Configuración Lateral */
+        #config-btn { position: absolute; top: 20px; right: 20px; font-size: 28px; cursor: pointer; z-index: 100; opacity: 0.7; }
+        #config-panel { position: fixed; top: 0; right: -350px; width: 320px; height: 100%; background: #111; padding: 25px; transition: 0.4s cubic-bezier(0.17, 0.67, 0.83, 0.67); box-shadow: -10px 0 30px rgba(0,0,0,0.8); z-index: 200; overflow-y: auto; }
+        #config-panel.open { right: 0; }
+
+        h3 { color: var(--accent); border-bottom: 1px solid #333; padding-bottom: 10px; font-weight: 300; }
+        label { font-size: 11px; color: #777; text-transform: uppercase; margin-top: 15px; display: block; }
+        input { width: 100%; padding: 12px; margin: 8px 0; border-radius: 8px; border: 1px solid #333; background: #222; color: white; box-sizing: border-box; }
+
+        /* Tarjetas de Crédito Visuales */
+        .cards-container { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; justify-content: center; }
+        .card { width: 200px; height: 110px; background: linear-gradient(135deg, #222, #000); border: 2px solid #333; border-radius: 15px; padding: 15px; cursor: pointer; transition: 0.3s; }
+        .card.active { border-color: var(--accent); box-shadow: 0 0 15px rgba(0, 212, 255, 0.4); transform: translateY(-5px); }
+        .card-type { font-size: 10px; color: var(--accent); font-weight: bold; }
+        .card-balance { font-size: 22px; margin-top: 10px; font-weight: 300; }
+
+        /* Orbe del Asistente */
+        .orb-wrapper { position: relative; width: 150px; height: 150px; display: flex; align-items: center; justify-content: center; }
+        .orb { width: 100px; height: 100px; background: radial-gradient(circle, var(--accent), transparent 70%); border-radius: 50%; transition: 0.5s; opacity: 0.4; }
+        .speaking { transform: scale(1.4); opacity: 1; box-shadow: 0 0 50px var(--accent); }
+        .listening { background: radial-gradient(circle, var(--violet), transparent 70%); opacity: 1; box-shadow: 0 0 40px var(--violet); animation: breath 2s infinite; }
+        .cancel-flash { background: radial-gradient(circle, var(--error), transparent 70%) !important; box-shadow: 0 0 60px var(--error) !important; }
+
+        @keyframes breath { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+
+        #status { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-top: 20px; text-align: center; height: 20px; }
+        .btn-main { padding: 15px 40px; border-radius: 30px; border: none; background: white; font-weight: bold; cursor: pointer; margin-top: 20px; transition: 0.3s; }
+        .btn-main:hover { background: var(--accent); color: white; }
+    </style>
+</head>
+<body>
+
+    <div id="config-btn" onclick="toggleConfig()">⚙️</div>
+
+    <div id="config-panel">
+        <h3>Ajustes de Nexi</h3>
+        <label>Tu Nombre</label>
+        <input type="text" id="userNameInput">
+        
+        <label>Saldo Tarjeta 1</label>
+        <input type="number" id="saldo1Input">
+        
+        <label>Saldo Tarjeta 2</label>
+        <input type="number" id="saldo2Input">
+
+        <label>PIN de Seguridad</label>
+        <input type="password" id="pinInput">
+
+        <h3>Agenda Nexi</h3>
+        <input type="text" id="newContactName" placeholder="Nombre">
+        <input type="email" id="newContactEmail" placeholder="Correo">
+        <button onclick="agregarContacto()" style="width:100%; background:#222; color:white; border:none; padding:10px; margin-top:5px; cursor:pointer;">+ Agregar Persona</button>
+        <div id="agendaDisplay" style="margin-top:10px; background:#000; border-radius:8px;"></div>
+
+        <button class="btn-main" onclick="guardarConfig()" style="width: 100%; margin-top: 30px;">ACTUALIZAR DATOS</button>
+    </div>
+
+    <div class="cards-container" id="cardsDisplay"></div>
+
+    <div class="orb-wrapper">
+        <div id="orb" class="orb"></div>
+    </div>
+    
+    <div id="status">DI "NEXI" PARA DESPERTARME</div>
+    <button id="startBtn" class="btn-main" onclick="iniciarAsistente()">ACTIVAR ASISTENTE</button>
+
+    <script>
+        // --- CONFIGURACIÓN Y PERSISTENCIA ---
+        let config = JSON.parse(localStorage.getItem('nexi_cfg')) || { nombre: "Usuario", pin: "1234" };
+        let tarjetas = JSON.parse(localStorage.getItem('nexi_tj')) || [
+            { id: 0, nombre: "Visa Platinum", saldo: 5000 },
+            { id: 1, nombre: "Nexus Gold", saldo: 2000 }
+        ];
+        let agenda = JSON.parse(localStorage.getItem('nexi_ag')) || [];
+        
+        let tSel = 0, estado = "esperando_activacion", montoP = 0, destinoP = null, isSpeaking = false;
+
+        function actualizarUI() {
+            document.getElementById('cardsDisplay').innerHTML = tarjetas.map(t => `
+                <div class="card ${tSel === t.id ? 'active' : ''}" onclick="tSel=${t.id}; actualizarUI();">
+                    <div class="card-type">${t.nombre}</div>
+                    <div class="card-balance">$${t.saldo.toLocaleString()}</div>
+                </div>`).join('');
+
+            document.getElementById('agendaDisplay').innerHTML = agenda.map((c, i) => `
+                <div style="font-size:12px; padding:8px; border-bottom:1px solid #222; display:flex; justify-content:space-between;">
+                    <span>${c.nombre}</span>
+                    <span onclick="eliminarContacto(${i})" style="color:red; cursor:pointer;">✕</span>
+                </div>`).join('');
+
+            document.getElementById('userNameInput').value = config.nombre;
+            document.getElementById('pinInput').value = config.pin;
+            document.getElementById('saldo1Input').value = tarjetas[0].saldo;
+            document.getElementById('saldo2Input').value = tarjetas[1].saldo;
+        }
+        actualizarUI();
+
+        // --- GESTIÓN DE PANEL ---
+        function toggleConfig() { document.getElementById('config-panel').classList.toggle('open'); }
+        function agregarContacto() {
+            const n = document.getElementById('newContactName').value, e = document.getElementById('newContactEmail').value;
+            if(n && e) { 
+                agenda.push({ nombre: n, email: e }); 
+                localStorage.setItem('nexi_ag', JSON.stringify(agenda)); 
+                actualizarUI();
+                document.getElementById('newContactName').value = ""; document.getElementById('newContactEmail').value = "";
+            }
+        }
+        function eliminarContacto(i) { agenda.splice(i, 1); localStorage.setItem('nexi_ag', JSON.stringify(agenda)); actualizarUI(); }
+        
+        function guardarConfig() {
+            config.nombre = document.getElementById('userNameInput').value;
+            config.pin = document.getElementById('pinInput').value;
+            tarjetas[0].saldo = parseFloat(document.getElementById('saldo1Input').value);
+            tarjetas[1].saldo = parseFloat(document.getElementById('saldo2Input').value);
+            localStorage.setItem('nexi_cfg', JSON.stringify(config));
+            localStorage.setItem('nexi_tj', JSON.stringify(tarjetas));
+            toggleConfig(); actualizarUI();
+            hablar("Configuración guardada.");
+        }
+
+        // --- LÓGICA DE VOZ NEXI ---
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.lang = 'es-MX';
+
+        function hablar(t) {
+            isSpeaking = true; recognition.stop(); window.speechSynthesis.cancel();
+            const m = new SpeechSynthesisUtterance(t);
+            m.onstart = () => document.getElementById('orb').className = 'orb speaking';
+            m.onend = () => {
+                isSpeaking = false; document.getElementById('orb').className = 'orb listening';
+                try { recognition.start(); } catch(e) {}
+            };
+            window.speechSynthesis.speak(m);
+        }
+
+        recognition.onresult = (e) => {
+            const voz = e.results[0][0].transcript.toLowerCase();
+            document.getElementById('status').innerText = "Voz: " + voz;
+
+            // COMANDO DE CANCELACIÓN PRIORITARIO
+            if (voz.includes("cancelar operación") || voz.includes("cancelar operacion")) {
+                estado = "esperando_activacion";
+                document.getElementById('orb').className = 'orb cancel-flash';
+                hablar("De acuerdo, he cancelado todo. Avísame si necesitas algo más.");
+                return;
+            }
+
+            // MÁQUINA DE ESTADOS
+            if (estado === "esperando_activacion") {
+                if (voz.includes("nexi")) {
+                    estado = "reposo";
+                    hablar(`Hola ${config.nombre}, estoy lista. ¿Qué movimiento haremos hoy?`);
+                }
+            }
+            else if (estado === "reposo") {
+                if (voz.includes("transferencia") || voz.includes("enviar") || voz.includes("depositar")) {
+                    estado = "buscando_contacto";
+                    hablar("¿A quién de tu agenda quieres enviarle dinero?");
+                }
+            } 
+            else if (estado === "buscando_contacto") {
+                const c = agenda.find(x => voz.includes(x.nombre.toLowerCase()));
+                if (c) { 
+                    destinoP = c; estado = "pidiendo_monto"; 
+                    hablar(`Perfecto. ¿Cuánto dinero le enviamos a ${c.nombre}?`); 
+                } else { 
+                    hablar("Esa persona no está en tu agenda. ¿A quién se lo envío?"); 
+                }
+            }
+            else if (estado === "pidiendo_monto") {
+                const n = voz.match(/\d+/);
+                if (n) { 
+                    montoP = parseInt(n[0]); 
+                    if (tarjetas[tSel].saldo >= montoP) { 
+                        estado = "confirmando_pin"; 
+                        hablar(`Confirmado, ${montoP} pesos. Dime tu clave para autorizar.`); 
+                    } else { 
+                        estado = "esperando_activacion"; 
+                        hablar("No tienes saldo suficiente en esta tarjeta. Operación terminada."); 
+                    }
+                }
+            }
+            else if (estado === "confirmando_pin") {
+                const pinLimpio = voz.replace(/\s/g, "");
+                if (pinLimpio.includes(config.pin)) {
+                    tarjetas[tSel].saldo -= montoP;
+                    localStorage.setItem('nexi_tj', JSON.stringify(tarjetas));
+                    estado = "esperando_activacion";
+                    actualizarUI();
+                    hablar(`Éxito ${config.nombre}. Depósito realizado. Tu nuevo saldo es de ${tarjetas[tSel].saldo} pesos.`);
+                } else { 
+                    hablar("PIN incorrecto. Inténtalo de nuevo o di cancelar operación."); 
+                }
+            }
+        };
+
+        recognition.onend = () => { if (!isSpeaking) recognition.start(); };
+
+        function iniciarAsistente() {
+            document.getElementById('startBtn').style.display = 'none';
+            estado = "esperando_activacion";
+            hablar(`Sistema Nexi activado. Di mi nombre para empezar.`);
+        }
+    </script>
+</body>
+</html>
